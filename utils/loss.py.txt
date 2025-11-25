@@ -1,0 +1,13 @@
+import torch.nn.functional as F
+
+# 组合损失函数（Dice Loss 和 BCE Loss）
+def combined_loss(pred, target):
+    # 计算 Dice Loss
+    intersection = (pred * target).sum()
+    dice_loss = 1 - (2. * intersection + 1) / (pred.sum() + target.sum() + 1)
+    
+    # 计算 Binary Cross-Entropy Loss
+    bce_loss = F.binary_cross_entropy(pred, target)
+    
+    # 结合两个损失函数
+    return bce_loss + dice_loss
