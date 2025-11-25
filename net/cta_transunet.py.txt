@@ -1,0 +1,91 @@
+import torch
+import torch.nn as nn
+import torchvision.models as models
+
+class CrossAxisAttention(nn.Module):
+    def __init__(self, in_channels, heads=8, patch_size=16):
+        super(CrossAxisAttention, self).__init__()
+        self.in_channels = in_channels
+        self.heads = heads
+        self.patch_size = patch_size
+        self.attention = nn.MultiheadAttention(in_channels, heads)
+    
+    def forward(self, x):
+        # Cross-Axis Attention in Horizontal and Vertical axes
+        # Apply self-attention to horizontal stripes
+        horizontal_stripes = x.view(x.size(0), self.patch_size, -1)  # Reshape to stripes
+        vertical_stripes = x.view(x.size(0), -1, self.patch_size)  # Reshape to vertical stripes
+        attn_output, _ = self.attention(horizontal_stripes, vertical_stripes, vertical_stripes)
+        return attn_output
+
+class CMFModule(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(CMFModule, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.attention = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x, y):
+        x = self.conv1(x)
+        y = self.conv2(y)
+        fusion = x + y
+        attention = self.attention(fusion)
+        return fusion * attention
+
+class SLFAModule(nn.Module):
+    def __init__(self, in_channels):
+        super(SLFAModule, self).__init__()
+        self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.conv(x)
+        return self.sigmoid(x) * x
+
+class CTA_TransUNet(nn.Module):
+    def __init__(self, num_classes=1):
+        super(CTA_TransUNet, self).__init__()
+        
+        # Encoder: ResNet-50 pre-trained
+        resnet = models.resnet50(pretrained=True)
+        self.encoder = nn.Sequential(*list(resnet.children())[:-2])  # Remove the last fully connected layers
+        
+        # Cross-Axis Transformer Context Fusion
+        self.ctcf = CrossAxisAttention(in_channels=2048)  # assuming output from ResNet-50
+        
+        # Contextual Multi-Level Fusion
+        self.cmf = CMFModule(in_channels=2048, out_channels=512)
+        
+        # Decoder with SLFA
+        self.decoder = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.slfa = SLFAModule(256)
+        
+        # Final Output
+        self.final_conv = nn.Conv2d(256, num_classes, kernel_size=1)
+
+    def forward(self, x):
+        # Encoder forward pass
+        x1 = self.encoder(x)
+        
+        # CTCF forward pass (Cross-Axis Attention)
+        x2 = self.ctcf(x1)
+        
+        # CMF forward pass
+        x3 = self.cmf(x1, x2)
+        
+        # Decoder with SLFA
+        x4 = self.decoder(x3)
+        x5 = self.slfa(x4)
+        
+        # Final segmentation output
+        output = self.final_conv(x5)
+        return output
+
+# Example usage
+model = CTA_TransUNet(num_classes=1)  # Binary segmentation (lesion/no lesion)
+input_tensor = torch.randn(1, 3, 576, 576)  # Example input
+output = model(input_tensor)
+print(output.shape)  # Expected output shape: [1, 1, 576, 576]
